@@ -23,18 +23,28 @@ st.title("RFQ Parser")
 st.caption("Type a buyer's packaging requirement. The parser extracts six fields.")
 
 if "text" not in st.session_state:
-    st.session_state.text = EXAMPLES[0]
+    st.session_state.text = ""
+    st.session_state.submitted = None   # the message that was last parsed
 
 st.write("Try an example:")
 for col, example in zip(st.columns(len(EXAMPLES)), EXAMPLES):
     if col.button(example, use_container_width=True):
-        st.session_state.text = example
+        st.session_state.text = example        # fill the box
+        st.session_state.submitted = None      # wait for Enter
 
-text = st.text_area("Buyer message", key="text", height=100,
-                    placeholder="e.g. woven sack 2.5 lac, 90 gsm, delivery Indore")
+# the parser runs only when the user presses Enter (the button below)
+with st.form("rfq"):
+    text = st.text_area("Buyer message", key="text", height=100,
+                        placeholder="e.g. woven sack 2.5 lac, 90 gsm, delivery Indore")
+    if st.form_submit_button("Enter", type="primary"):
+        st.session_state.submitted = text
 
-if text.strip():
-    result = parse_rfq(text)
+submitted = st.session_state.submitted
+if submitted is not None and not submitted.strip():
+    st.warning("Please type a message first.")
+elif submitted:
+    st.caption(f"Parsed: {submitted}")
+    result = parse_rfq(submitted)
 
     def show(value):
         return "—" if value is None else str(value)
@@ -51,4 +61,4 @@ if text.strip():
     st.subheader("Output of parse_rfq()")
     st.code(json.dumps(result, indent=2, ensure_ascii=False), language="json")
 else:
-    st.info("Enter a message above to see the parsed fields.")
+    st.info("Type a message and press Enter to see the parsed fields.")
