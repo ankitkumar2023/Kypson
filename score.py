@@ -1,68 +1,50 @@
-"""Stand-in scorer (Kypson's own score.py was not in the files received).
+"""Scores parse_rfq() from parse.py against a labelled .jsonl file.
 
-Usage:  python score.py my_tests.jsonl
-
-Scores parse_rfq() from parse.py field by field: exact match, numbers compared
-as numbers, location case-insensitive. Prints every failing message.
+Usage:  python score.py            (uses my_tests.jsonl)
+        python score.py other.jsonl
 """
-import json
-import os
-import sys
-import time
+import json, sys, time
+from parse import parse_rfq
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from parse import parse_rfq  # noqa: E402
-
-KEYS = ["category", "quantity", "unit", "gsm", "micron", "location"]
+FIELDS = ["category", "quantity", "unit", "gsm", "micron", "location"]
 
 
-def same(key, got, want):
-    if got is None or want is None:
+def same(field, got, want):
+    if want is None or got is None:
         return got is None and want is None
-    if key == "location":
-        return str(got).strip().lower() == str(want).strip().lower()
-    if key in ("quantity", "gsm", "micron"):
+    if field == "quantity":
         try:
-            return abs(float(got) - float(want)) < 1e-6
+            return abs(float(got) - float(want)) < 1e-9
         except (TypeError, ValueError):
             return False
+    if field == "location":
+        return str(got).strip().lower() == str(want).strip().lower()
     return got == want
 
 
-def main():
-    if len(sys.argv) < 2:
-        print("usage: python score.py my_tests.jsonl")
-        sys.exit(1)
-    try:
-        sys.stdout.reconfigure(encoding="utf-8")
-    except Exception:
-        pass
-    with open(sys.argv[1], encoding="utf-8") as f:
-        rows = [json.loads(line) for line in f if line.strip()]
-
-    start = time.time()
-    field_ok = {k: 0 for k in KEYS}
+def main(path):
+    rows = [json.loads(l) for l in open(path, encoding="utf-8") if l.strip()]
+    per_field = {f: 0 for f in FIELDS}
     all_ok = 0
-    for row in rows:
-        got = parse_rfq(row["text"])
-        if set(got) != set(KEYS):
-            print(f"BAD KEYS {row['text']!r}: {sorted(got)}")
-        bad = [k for k in KEYS if not same(k, got.get(k), row["expected"].get(k))]
-        for k in KEYS:
-            field_ok[k] += k not in bad
-        all_ok += not bad
-        if bad:
-            print(f"FAIL {row['text']!r}")
-            for k in bad:
-                print(f"     {k}: got {got.get(k)!r}  expected {row['expected'].get(k)!r}")
-
+    start = time.time()
+    for r in rows:
+        out = parse_rfq(r["text"])
+        if not isinstance(out, dict):
+            raise TypeError("parse_rfq must return a dict")
+        ok = True
+        for f in FIELDS:
+            if same(f, out.get(f), r["expected"][f]):
+                per_field[f] += 1
+            else:
+                ok = False
+        all_ok += ok
+    secs = time.time() - start
     n = len(rows)
-    print(f"\n{n} messages in {time.time() - start:.2f}s")
-    for k in KEYS:
-        print(f"  {k:9s} {field_ok[k]}/{n}")
-    print(f"  all six fields correct: {all_ok}/{n}")
-    print(f"  field accuracy: {sum(field_ok.values()) / (6 * n):.1%}")
+    print(f"Examples: {n}   time: {secs:.2f}s")
+    for f in FIELDS:
+        print(f"  {f:10s} {per_field[f]:3d}/{n}  {per_field[f] / n:6.1%}")
+    print(f"  {'ALL FIELDS':10s} {all_ok:3d}/{n}  {all_ok / n:6.1%}")
 
 
 if __name__ == "__main__":
-    main()
+    main(sys.argv[1] if len(sys.argv) > 1 else "my_tests.jsonl")

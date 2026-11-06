@@ -153,6 +153,8 @@ sachets mono duplex folding zipper ziplock zip lock stand standup standy doypack
 board paper medicine pharma cosmetic cosmetics sweet sweets mithai snacks namkeen import
 imported port virgin recycled reprocessed uv treated stabilized stabilised hindi english one
 two three four five ten twenty fifty tomorrow today kal aaj parso next weeks months days day
+sample samples matte gloss glossy metallic silver golden handle handles zaroorat urgently
+looking sector client fabric masala clay monocarton monocartons mix factor yrs
 """)
 
 # location cue words
@@ -200,7 +202,8 @@ Dehradun, Rishikesh, Kolkata, Calcutta, Chennai, Madras, Ambattur, Guindy,
 Hyderabad, Secunderabad, Bengaluru, Bangalore, Bombay, Poona,
 Gujarat, Maharashtra, Rajasthan, Punjab, Haryana, Karnataka, Kerala, Telangana,
 Andhra Pradesh, Tamil Nadu, Uttar Pradesh, Madhya Pradesh, West Bengal, Bihar,
-Jharkhand, Odisha, Orissa, Assam, Uttarakhand, Himachal Pradesh, Chhattisgarh
+Jharkhand, Odisha, Orissa, Assam, Uttarakhand, Himachal Pradesh, Chhattisgarh,
+Kutch, Kachchh
 """
 STATES = words("gujarat maharashtra rajasthan punjab haryana karnataka kerala telangana bihar "
                "jharkhand odisha orissa assam uttarakhand chhattisgarh goa") | {
@@ -299,6 +302,11 @@ def load_places():
     return places, sorted(places, key=lambda k: -population[k])
 
 
+def hindi_key(word):
+    """"इंदौर" and "इन्दौर" are the same word: the nasal ं can also be written न् / म्."""
+    return word.replace("न्", "ं").replace("म्", "ं").replace("ँ", "ं")
+
+
 @lru_cache(maxsize=1)
 def devanagari_cities():
     out = {}
@@ -308,7 +316,7 @@ def devanagari_cities():
             if city["countrycode"] == "IN":
                 for alt in city.get("alternatenames", []):
                     if re.fullmatch(r"[ऀ-ॿ]+", alt):
-                        out.setdefault(alt, to_ascii(city["name"]))
+                        out.setdefault(hindi_key(alt), to_ascii(city["name"]))
     except Exception:
         pass
     return out
@@ -323,7 +331,8 @@ def clean_text(text):
     for hindi, roman in DEVANAGARI.items():
         t = t.replace(hindi, f" {roman} ")
     if re.search(r"[ऀ-ॿ]", t):   # Devanagari city names -> latin ("इंदौर" -> Indore)
-        t = re.sub(r"[ऀ-ॿ]+", lambda m: f" {devanagari_cities().get(m.group(), m.group())} ", t)
+        t = re.sub(r"[ऀ-ॿ]+",
+                   lambda m: f" {devanagari_cities().get(hindi_key(m.group()), m.group())} ", t)
     for old, new in {"₹": " rs ", "µ": " micron ", "μ": " micron ", "×": " x ", "*": " x ",
                      "’": "'", "–": "-"}.items():
         t = t.replace(old, new)
@@ -453,16 +462,20 @@ def label_number(m, toks, places):
     digits = m["raw"].replace(".", "") if is_num(m["raw"]) else ""
     m["after_product"] = prv in PCS_WORDS   # "box 2000", "bags 40000"
 
-    def owns(tok):   # "25 mic": a small number right before the keyword already owns it
-        return is_num(tok) and float(tok) < 1000   # ...but "40000 gsm 65" doesn't
+    def owns(i):
+        """"25 mic 500": the 25 right before "mic" already owns it. Not when the number is
+        too big to be a spec ("40000 gsm 65") or belongs to its own label ("GSM 75 MIC 20")."""
+        tok = at(i)
+        return is_num(tok) and float(tok) < 1000 \
+            and at(i - 1) not in GSM_WORDS | MICRON_WORDS | GAUGE_WORDS
 
     def keyword_before(kw):
         """"gsm 65", "gsm: 65" -- but not the 500 in "25 mic 500 kg" (mic belongs to 25)."""
-        if nxt in UNIT_WORDS:
+        if nxt in UNIT_WORDS and not is_num(nxt2):   # "GSM 75 MIC 20": MIC labels the 20
             return False
         if prv in kw:
-            return not owns(prv2)
-        return prv in {":", "-", "=", "of"} and prv2 in kw and not owns(at(s - 3))
+            return not owns(s - 2)
+        return prv in {":", "-", "=", "of"} and prv2 in kw and not owns(s - 3)
 
     def kind():
         spec_ok = not m["mult"] and m["value"] < 1000   # "50 thousand" is never a gsm
@@ -713,7 +726,10 @@ def find_location(toks, places, keys):
         tok = toks[i] if 0 <= i < n else ""
         return (is_word(i) and 3 <= len(tok) <= 20 and not CHAHIYE.match(tok)
                 and tok not in STOPWORDS | GSM_WORDS | MICRON_WORDS | PCS_WORDS
-                and tok not in MULTIPLIERS and tok not in WORD_NUMBERS
+                and tok not in MULTIPLIERS and tok not in WORD_NUMBERS and tok not in FRACTIONS
+                and tok not in ADD_TO_NEXT
+                and tok not in QTY_BEFORE | QUINTAL_WORDS | PIN_BEFORE | PHONE_BEFORE
+                and tok not in TIME_WORDS | PER_PERIOD | CUE_AFTER
                 and fix_typo(tok) not in TYPO_VOCAB)
 
     def title(ws):
@@ -738,6 +754,8 @@ def find_location(toks, places, keys):
             town = []
             while j >= 0 and len(town) < 2 and could_be_place(j):
                 town.insert(0, toks[j])
+                j -= 1
+            while j >= 0 and toks[j] in {":", "-", "our", "the", "my"}:   # "location: X", "at our X"
                 j -= 1
             if town and j >= 0 and toks[j] in CUE_BEFORE - {"from", "frm"}:
                 return title(town)
@@ -764,6 +782,14 @@ def find_location(toks, places, keys):
             starts = [i for i in range(n - len(chunk) + 1) if toks[i:i + len(chunk)] == chunk]
             if starts and all(could_be_place(starts[-1] + k) for k in range(len(chunk))):
                 return title(chunk)
+    # an unknown word at the very end, right after the quantity ("... 2 lakh Rajgangpur")
+    last = n - 1
+    while last >= 0 and not toks[last].isalnum():   # skip a final "." or "!"
+        last -= 1
+    before = toks[last - 1] if last >= 1 else ""
+    if last >= 1 and len(toks[last]) >= 4 and could_be_place(last) \
+            and (is_num(before) or before in MULTIPLIERS or before in PCS_WORDS | KG_WORDS | TON_WORDS):
+        return title([toks[last]])
     return None
 
 
